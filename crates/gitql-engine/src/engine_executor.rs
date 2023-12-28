@@ -3,10 +3,11 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use gitql_ast::aggregation::AGGREGATIONS;
-use gitql_ast::enviroment::Enviroment;
+use gitql_ast::environment::Environment;
 use gitql_ast::object::flat_gql_groups;
 use gitql_ast::object::GQLObject;
-use gitql_ast::statement::AggregationFunctionsStatement;
+use gitql_ast::statement::AggregateValue;
+use gitql_ast::statement::AggregationsStatement;
 use gitql_ast::statement::GlobalVariableStatement;
 use gitql_ast::statement::GroupByStatement;
 use gitql_ast::statement::HavingStatement;
@@ -26,14 +27,14 @@ use crate::engine_function::select_gql_objects;
 
 #[allow(clippy::borrowed_box)]
 pub fn execute_statement(
-    env: &mut Enviroment,
+    env: &mut Environment,
     statement: &Box<dyn Statement>,
     repo: &gix::Repository,
     groups: &mut Vec<Vec<GQLObject>>,
     alias_table: &mut HashMap<String, String>,
     hidden_selection: &Vec<String>,
 ) -> Result<(), String> {
-    match statement.get_statement_kind() {
+    match statement.kind() {
         Select => {
             let statement = statement
                 .as_any()
@@ -86,9 +87,9 @@ pub fn execute_statement(
         AggregateFunction => {
             let statement = statement
                 .as_any()
-                .downcast_ref::<AggregationFunctionsStatement>()
+                .downcast_ref::<AggregationsStatement>()
                 .unwrap();
-            execute_aggregation_function_statement(statement, groups, alias_table)
+            execute_aggregation_function_statement(env, statement, groups, alias_table)
         }
         GlobalVariable => {
             let statement = statement
@@ -101,7 +102,7 @@ pub fn execute_statement(
 }
 
 fn execute_select_statement(
-    env: &mut Enviroment,
+    env: &mut Environment,
     statement: &SelectStatement,
     repo: &gix::Repository,
     groups: &mut Vec<Vec<GQLObject>>,
@@ -117,7 +118,7 @@ fn execute_select_statement(
         }
     }
 
-    // Select obects from the target table
+    // Select objects from the target table
     let mut objects = select_gql_objects(
         env,
         repo,
@@ -138,7 +139,7 @@ fn execute_select_statement(
 }
 
 fn execute_where_statement(
-    env: &mut Enviroment,
+    env: &mut Environment,
     statement: &WhereStatement,
     groups: &mut Vec<Vec<GQLObject>>,
 ) -> Result<(), String> {
@@ -169,7 +170,7 @@ fn execute_where_statement(
 }
 
 fn execute_having_statement(
-    env: &mut Enviroment,
+    env: &mut Environment,
     statement: &HavingStatement,
     groups: &mut Vec<Vec<GQLObject>>,
 ) -> Result<(), String> {
@@ -241,7 +242,7 @@ fn execute_offset_statement(
 }
 
 fn execute_order_by_statement(
-    env: &mut Enviroment,
+    env: &mut Environment,
     statement: &OrderByStatement,
     groups: &mut Vec<Vec<GQLObject>>,
 ) -> Result<(), String> {
@@ -336,7 +337,8 @@ fn execute_group_by_statement(
 }
 
 fn execute_aggregation_function_statement(
-    statement: &AggregationFunctionsStatement,
+    env: &mut Environment,
+    statement: &AggregationsStatement,
     groups: &mut Vec<Vec<GQLObject>>,
     alias_table: &HashMap<String, String>,
 ) -> Result<(), String> {
@@ -346,34 +348,64 @@ fn execute_aggregation_function_statement(
         return Ok(());
     }
 
-    // Used to determind if group by statement is executed before or not
+    // Used to determine if group by statement is executed before or not
     let groups_count = groups.len();
 
     // We should run aggregation function for each group
     for group in groups {
+        // No need to apply all aggregation if there is no selected elements
+        if group.is_empty() {
+            continue;
+        }
+
+        // Resolve all aggregations functions first
         for aggregation in aggregations_map {
-            let function = aggregation.1;
+            if let AggregateValue::Function(function, argument) = aggregation.1 {
+                // Get alias name if exists or column name by default
+                let result_column_name = aggregation.0;
+                let column_name = get_column_name(alias_table, result_column_name);
 
-            // Get the target aggregation function
-            let aggregation_function = AGGREGATIONS.get(function.function_name.as_str()).unwrap();
+                // Get the target aggregation function
+                let aggregation_function = AGGREGATIONS.get(function.as_str()).unwrap();
+                let result = &aggregation_function(&argument.to_string(), group);
 
-            // Execute aggregation function once for group
-            let result_column_name = aggregation.0;
-            let argument = &function.argument;
-            let result = &aggregation_function(&argument.to_string(), group);
+                // Insert the calculated value in the group objects
+                for object in group.iter_mut() {
+                    object
+                        .attributes
+                        .insert(column_name.to_string(), result.to_owned());
+                } // Get the target aggregation function
+                let aggregation_function = AGGREGATIONS.get(function.as_str()).unwrap();
+                let result = &aggregation_function(&argument.to_string(), group);
 
-            // Get alias name if exists or column name by default
-            let column_name = get_column_name(alias_table, result_column_name);
-
-            // Insert the calculated value in the group objects
-            for object in group.iter_mut() {
-                object
-                    .attributes
-                    .insert(column_name.to_string(), result.to_owned());
+                // Insert the calculated value in the group objects
+                for object in group.iter_mut() {
+                    object
+                        .attributes
+                        .insert(column_name.to_string(), result.to_owned());
+                }
             }
         }
 
-        // In case of group by statement is exectued
+        // Resolve aggregations expressions
+        for aggregation in aggregations_map {
+            if let AggregateValue::Expression(expr) = aggregation.1 {
+                // Get alias name if exists or column name by default
+                let result_column_name = aggregation.0;
+                let column_name = get_column_name(alias_table, result_column_name);
+
+                // Insert the calculated value in the group objects
+                for object in group.iter_mut() {
+                    let result = evaluate_expression(env, expr, &object.attributes)?;
+
+                    object
+                        .attributes
+                        .insert(column_name.to_string(), result.to_owned());
+                }
+            }
+        }
+
+        // In case of group by statement is executed
         // Remove all elements expect the first one
         if groups_count > 1 {
             group.drain(1..);
@@ -384,7 +416,7 @@ fn execute_aggregation_function_statement(
 }
 
 pub fn execute_global_variable_statement(
-    env: &mut Enviroment,
+    env: &mut Environment,
     statement: &GlobalVariableStatement,
 ) -> Result<(), String> {
     let value = evaluate_expression(env, &statement.value, &HashMap::default())?;

@@ -1,12 +1,13 @@
 use std::any::Any;
 
-use crate::enviroment::Enviroment;
+use crate::environment::Environment;
 use crate::function::PROTOTYPES;
 use crate::types::{DataType, TABLES_FIELDS_TYPES};
 use crate::value::Value;
 
 #[derive(PartialEq)]
 pub enum ExpressionKind {
+    Assignment,
     String,
     Symbol,
     GlobalVariable,
@@ -28,17 +29,36 @@ pub enum ExpressionKind {
 }
 
 pub trait Expression {
-    fn expression_kind(&self) -> ExpressionKind;
-    fn expr_type(&self, scope: &Enviroment) -> DataType;
+    fn kind(&self) -> ExpressionKind;
+    fn expr_type(&self, scope: &Environment) -> DataType;
     fn as_any(&self) -> &dyn Any;
 }
 
 impl dyn Expression {
     pub fn is_const(&self) -> bool {
         matches!(
-            self.expression_kind(),
+            self.kind(),
             ExpressionKind::Number | ExpressionKind::Boolean | ExpressionKind::String
         )
+    }
+}
+
+pub struct AssignmentExpression {
+    pub symbol: String,
+    pub value: Box<dyn Expression>,
+}
+
+impl Expression for AssignmentExpression {
+    fn kind(&self) -> ExpressionKind {
+        ExpressionKind::Assignment
+    }
+
+    fn expr_type(&self, scope: &Environment) -> DataType {
+        self.value.expr_type(scope)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -55,11 +75,11 @@ pub struct StringExpression {
 }
 
 impl Expression for StringExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::String
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         match self.value_type {
             StringValueType::Text => DataType::Text,
             StringValueType::Time => DataType::Time,
@@ -78,11 +98,11 @@ pub struct SymbolExpression {
 }
 
 impl Expression for SymbolExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Symbol
     }
 
-    fn expr_type(&self, scope: &Enviroment) -> DataType {
+    fn expr_type(&self, scope: &Environment) -> DataType {
         // Search in symbol table
         if scope.contains(&self.value) {
             return scope.scopes[self.value.as_str()].clone();
@@ -106,11 +126,11 @@ pub struct GlobalVariableExpression {
 }
 
 impl Expression for GlobalVariableExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::GlobalVariable
     }
 
-    fn expr_type(&self, scope: &Enviroment) -> DataType {
+    fn expr_type(&self, scope: &Environment) -> DataType {
         if scope.globals_types.contains_key(&self.name) {
             return scope.globals_types[self.name.as_str()].clone();
         }
@@ -127,11 +147,11 @@ pub struct NumberExpression {
 }
 
 impl Expression for NumberExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Number
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         self.value.data_type()
     }
 
@@ -145,11 +165,11 @@ pub struct BooleanExpression {
 }
 
 impl Expression for BooleanExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Boolean
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Boolean
     }
 
@@ -170,11 +190,11 @@ pub struct PrefixUnary {
 }
 
 impl Expression for PrefixUnary {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::PrefixUnary
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         if self.op == PrefixUnaryOperator::Bang {
             DataType::Boolean
         } else {
@@ -203,11 +223,11 @@ pub struct ArithmeticExpression {
 }
 
 impl Expression for ArithmeticExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Arithmetic
     }
 
-    fn expr_type(&self, scope: &Enviroment) -> DataType {
+    fn expr_type(&self, scope: &Environment) -> DataType {
         let lhs = self.left.expr_type(scope);
         let rhs = self.left.expr_type(scope);
 
@@ -241,11 +261,11 @@ pub struct ComparisonExpression {
 }
 
 impl Expression for ComparisonExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Comparison
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         if self.operator == ComparisonOperator::NullSafeEqual {
             DataType::Integer
         } else {
@@ -264,11 +284,11 @@ pub struct LikeExpression {
 }
 
 impl Expression for LikeExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Like
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Boolean
     }
 
@@ -283,11 +303,11 @@ pub struct GlobExpression {
 }
 
 impl Expression for GlobExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Glob
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Boolean
     }
 
@@ -310,11 +330,11 @@ pub struct LogicalExpression {
 }
 
 impl Expression for LogicalExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Logical
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Boolean
     }
 
@@ -338,11 +358,11 @@ pub struct BitwiseExpression {
 }
 
 impl Expression for BitwiseExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Bitwise
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Integer
     }
 
@@ -358,11 +378,11 @@ pub struct CallExpression {
 }
 
 impl Expression for CallExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Call
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         let prototype = PROTOTYPES.get(&self.function_name.as_str()).unwrap();
         prototype.result.clone()
     }
@@ -379,11 +399,11 @@ pub struct BetweenExpression {
 }
 
 impl Expression for BetweenExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Between
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Boolean
     }
 
@@ -400,11 +420,11 @@ pub struct CaseExpression {
 }
 
 impl Expression for CaseExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Case
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         self.values_type.clone()
     }
 
@@ -420,11 +440,11 @@ pub struct InExpression {
 }
 
 impl Expression for InExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::In
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         self.values_type.clone()
     }
 
@@ -439,11 +459,11 @@ pub struct IsNullExpression {
 }
 
 impl Expression for IsNullExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::IsNull
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Boolean
     }
 
@@ -455,11 +475,11 @@ impl Expression for IsNullExpression {
 pub struct NullExpression {}
 
 impl Expression for NullExpression {
-    fn expression_kind(&self) -> ExpressionKind {
+    fn kind(&self) -> ExpressionKind {
         ExpressionKind::Null
     }
 
-    fn expr_type(&self, _scope: &Enviroment) -> DataType {
+    fn expr_type(&self, _scope: &Environment) -> DataType {
         DataType::Null
     }
 

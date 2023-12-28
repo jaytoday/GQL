@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::vec;
 
-use gitql_ast::enviroment::Enviroment;
+use gitql_ast::environment::Environment;
 use gitql_ast::object::GQLObject;
 use gitql_ast::statement::GQLQuery;
 use gitql_ast::statement::Query;
@@ -31,7 +31,7 @@ pub enum EvaluationResult {
 }
 
 pub fn evaluate(
-    env: &mut Enviroment,
+    env: &mut Environment,
     repos: &[gix::Repository],
     query: Query,
 ) -> Result<EvaluationResult, String> {
@@ -45,7 +45,7 @@ pub fn evaluate(
 }
 
 pub fn evaluate_select_query(
-    env: &mut Enviroment,
+    env: &mut Environment,
     repos: &[gix::Repository],
     query: GQLQuery,
 ) -> Result<EvaluationResult, String> {
@@ -78,6 +78,12 @@ pub fn evaluate_select_query(
                             &mut alias_table,
                             &hidden_selections,
                         )?;
+
+                        // If the main group is empty, no need to perform other statements
+                        if groups.is_empty() || groups[0].is_empty() {
+                            return Ok(EvaluationResult::SelectedGroups(vec![], hidden_selections));
+                        }
+
                         continue;
                     }
 
@@ -104,7 +110,7 @@ pub fn evaluate_select_query(
                     }
                 }
                 _ => {
-                    // Any other statement can be performend on first or non repository
+                    // Any other statement can be performed on first or non repository
                     execute_statement(
                         env,
                         statement,
@@ -165,7 +171,7 @@ fn apply_distinct_on_objects_group(groups: &mut Vec<Vec<GQLObject>>, hidden_sele
         // Build row of the selected only values
         let mut row_values: Vec<String> = Vec::with_capacity(titles_count);
         for key in &titles {
-            row_values.push(object.attributes.get(key as &str).unwrap().literal());
+            row_values.push(object.attributes.get(key as &str).unwrap().to_string());
         }
 
         // Compute the hash for row of values

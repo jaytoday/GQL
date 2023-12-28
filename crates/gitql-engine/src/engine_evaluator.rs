@@ -1,8 +1,9 @@
 use gitql_ast::date_utils::date_time_to_time_stamp;
 use gitql_ast::date_utils::date_to_time_stamp;
-use gitql_ast::enviroment::Enviroment;
+use gitql_ast::environment::Environment;
 use gitql_ast::expression::ArithmeticExpression;
 use gitql_ast::expression::ArithmeticOperator;
+use gitql_ast::expression::AssignmentExpression;
 use gitql_ast::expression::BetweenExpression;
 use gitql_ast::expression::BitwiseExpression;
 use gitql_ast::expression::BitwiseOperator;
@@ -36,11 +37,18 @@ use std::string::String;
 
 #[allow(clippy::borrowed_box)]
 pub fn evaluate_expression(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expression: &Box<dyn Expression>,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
-    match expression.expression_kind() {
+    match expression.kind() {
+        Assignment => {
+            let expr = expression
+                .as_any()
+                .downcast_ref::<AssignmentExpression>()
+                .unwrap();
+            evaluate_assignment(env, expr, object)
+        }
         String => {
             let expr = expression
                 .as_any()
@@ -60,7 +68,7 @@ pub fn evaluate_expression(
                 .as_any()
                 .downcast_ref::<GlobalVariableExpression>()
                 .unwrap();
-            evaulate_global_variable(env, expr)
+            evaluate_global_variable(env, expr)
         }
         Number => {
             let expr = expression
@@ -99,14 +107,14 @@ pub fn evaluate_expression(
                 .as_any()
                 .downcast_ref::<LikeExpression>()
                 .unwrap();
-            evaulate_like(env, expr, object)
+            evaluate_like(env, expr, object)
         }
         Glob => {
             let expr = expression
                 .as_any()
                 .downcast_ref::<GlobExpression>()
                 .unwrap();
-            evaulate_glob(env, expr, object)
+            evaluate_glob(env, expr, object)
         }
         Logical => {
             let expr = expression
@@ -158,6 +166,16 @@ pub fn evaluate_expression(
     }
 }
 
+fn evaluate_assignment(
+    env: &mut Environment,
+    expr: &AssignmentExpression,
+    object: &HashMap<String, Value>,
+) -> Result<Value, String> {
+    let value = evaluate_expression(env, &expr.value, object)?;
+    env.globals.insert(expr.symbol.to_string(), value.clone());
+    Ok(value)
+}
+
 fn evaluate_string(expr: &StringExpression) -> Result<Value, String> {
     match expr.value_type {
         StringValueType::Text => Ok(Value::Text(expr.value.to_owned())),
@@ -183,11 +201,19 @@ fn evaluate_symbol(
     Err(format!("Invalid column name `{}`", &expr.value))
 }
 
-fn evaulate_global_variable(
-    env: &mut Enviroment,
+fn evaluate_global_variable(
+    env: &mut Environment,
     expr: &GlobalVariableExpression,
 ) -> Result<Value, String> {
-    Ok(env.globals[&expr.name].clone())
+    let name = &expr.name;
+    if env.globals.contains_key(name) {
+        return Ok(env.globals[name].clone());
+    }
+
+    Err(format!(
+        "The value of `{}` may be not exists or calculated yet",
+        name
+    ))
 }
 
 fn evaluate_number(expr: &NumberExpression) -> Result<Value, String> {
@@ -199,7 +225,7 @@ fn evaluate_boolean(expr: &BooleanExpression) -> Result<Value, String> {
 }
 
 fn evaluate_prefix_unary(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &PrefixUnary,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -212,7 +238,7 @@ fn evaluate_prefix_unary(
 }
 
 fn evaluate_arithmetic(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &ArithmeticExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -229,7 +255,7 @@ fn evaluate_arithmetic(
 }
 
 fn evaluate_comparison(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &ComparisonExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -250,7 +276,7 @@ fn evaluate_comparison(
         let irhs = rhs.as_bool();
         ilhs.cmp(&irhs)
     } else {
-        lhs.literal().cmp(&rhs.literal())
+        lhs.to_string().cmp(&rhs.to_string())
     };
 
     if expr.operator == ComparisonOperator::NullSafeEqual {
@@ -285,8 +311,8 @@ fn evaluate_comparison(
     }))
 }
 
-fn evaulate_like(
-    env: &mut Enviroment,
+fn evaluate_like(
+    env: &mut Environment,
     expr: &LikeExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -306,8 +332,8 @@ fn evaulate_like(
     Ok(Value::Boolean(regex.is_match(&lhs)))
 }
 
-fn evaulate_glob(
-    env: &mut Enviroment,
+fn evaluate_glob(
+    env: &mut Environment,
     expr: &GlobExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -326,7 +352,7 @@ fn evaulate_glob(
 }
 
 fn evaluate_logical(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &LogicalExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -349,7 +375,7 @@ fn evaluate_logical(
 }
 
 fn evaluate_bitwise(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &BitwiseExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -377,7 +403,7 @@ fn evaluate_bitwise(
 }
 
 fn evaluate_call(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &CallExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -389,11 +415,11 @@ fn evaluate_call(
         arguments.push(evaluate_expression(env, arg, object)?);
     }
 
-    Ok(function(arguments))
+    Ok(function(&arguments))
 }
 
 fn evaluate_between(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &BetweenExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -407,7 +433,7 @@ fn evaluate_between(
 }
 
 fn evaluate_case(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &CaseExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -428,7 +454,7 @@ fn evaluate_case(
 }
 
 fn evaluate_in(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &InExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
@@ -443,12 +469,12 @@ fn evaluate_in(
 }
 
 fn evaluate_is_null(
-    env: &mut Enviroment,
+    env: &mut Environment,
     expr: &IsNullExpression,
     object: &HashMap<String, Value>,
 ) -> Result<Value, String> {
     let argument = evaluate_expression(env, &expr.argument, object)?;
-    let is_null = argument.data_type().is_type(DataType::Null);
+    let is_null = argument.data_type().is_null();
     Ok(Value::Boolean(if expr.has_not {
         !is_null
     } else {
